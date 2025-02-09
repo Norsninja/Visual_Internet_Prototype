@@ -10,6 +10,9 @@ import logging
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+# Import Scapy functions
+from scapy.all import IP, TCP, sr, send
+
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
@@ -19,6 +22,7 @@ graph_data = {"nodes": [], "edges": []}
 graph_lock = threading.Lock()
 
 ### CORE ENVIRONMENTAL SCANNERS ###
+
 def get_local_ip():
     """Get the local IP address of this machine."""
     try:
@@ -86,7 +90,7 @@ def get_asn_info(ip):
 
 def get_mac(ip):
     """Retrieve the MAC address for a local network device."""
-    if not ip.startswith(("192.168.", "10.", "172.")):  
+    if not ip.startswith(("192.168.", "10.", "172.")):
         return "Unavailable (External Network)"
     try:
         result = subprocess.run(["arp", "-a"], capture_output=True, text=True, shell=True)
@@ -98,22 +102,42 @@ def get_mac(ip):
         logging.error("Error getting MAC for %s: %s", ip, e)
     return "Unknown"
 
-### PORT SCANNER ###
-def port_scan(ip, start_port=20, end_port=1024, timeout=0.5):
-    """Simple port scanner for a given IP address."""
+### NEW PORT SCANNER USING SCAPY ###
+
+def scapy_port_scan(ip, start_port=20, end_port=1024, timeout=2):
+    """
+    Perform a TCP SYN scan using Scapy on the given IP address.
+    
+    :param ip: Target IP address.
+    :param start_port: Starting port number.
+    :param end_port: Ending port number.
+    :param timeout: Timeout in seconds for responses.
+    :return: A list of open ports.
+    """
     open_ports = []
-    for port in range(start_port, end_port + 1):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(timeout)
-                result = sock.connect_ex((ip, port))
-                if result == 0:
-                    open_ports.append(port)
-        except Exception as e:
-            logging.error("Error scanning port %s on %s: %s", port, ip, e)
+    ports = list(range(start_port, end_port + 1))
+    
+    # Build the SYN packets for all ports
+    packets = [IP(dst=ip)/TCP(dport=port, flags="S") for port in ports]
+    
+    logging.info("Starting Scapy scan on %s for ports %s to %s", ip, start_port, end_port)
+    
+    # Send the packets concurrently and collect responses
+    answered, unanswered = sr(packets, timeout=timeout, verbose=0)
+    
+    # Process the responses: a SYN-ACK (flags=0x12) indicates an open port
+    for sent, received in answered:
+        tcp_layer = received.getlayer(TCP)
+        if tcp_layer and tcp_layer.flags == 0x12:
+            open_ports.append(sent.dport)
+            # Send a RST packet to gracefully close the half-open connection
+            send(IP(dst=ip)/TCP(dport=sent.dport, flags="R"), verbose=0)
+    
+    logging.info("Scapy scan complete on %s, open ports: %s", ip, open_ports)
     return open_ports
 
 ### ENVIRONMENTAL DATA UPDATER ###
+
 def update_graph_data():
     """Continuously update the network graph data every 10 seconds."""
     global graph_data
@@ -160,7 +184,7 @@ def update_graph_data():
                 })
                 edges.append({"source": gateway_ip, "target": device})
 
-        # Add External Nodes
+        # Add External Nodes via traceroute
         prev_hop = gateway_ip
         for hop in traceroute_hops:
             if hop != gateway_ip:
@@ -190,8 +214,12 @@ def scan_ports():
     ip = request.args.get('ip')
     if not ip:
         return jsonify({'error': 'Missing IP parameter'}), 400
-    open_ports = port_scan(ip)
-    return jsonify({'ports': open_ports})
+    try:
+        open_ports = scapy_port_scan(ip)
+        return jsonify({'ports': open_ports})
+    except Exception as e:
+        logging.error("Error scanning ports for %s: %s", ip, e)
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     threading.Thread(target=update_graph_data, daemon=True).start()

@@ -12,7 +12,7 @@ export class World {
     this.edgeRegistry = new Map();  // Map of edgeKey to Three.js Line
     this.nodePositions = new Map(); // Persistent positions for nodes
 
-    // Create an HTML info box for displaying node details
+    // Create an HTML info box for displaying node details and the port scan button/results
     this.infoBox = document.createElement("div");
     this.infoBox.style.position = "absolute";
     this.infoBox.style.backgroundColor = "rgba(0, 0, 0, 0.8)";
@@ -20,6 +20,8 @@ export class World {
     this.infoBox.style.padding = "10px";
     this.infoBox.style.borderRadius = "5px";
     this.infoBox.style.display = "none";
+    // Prevent pointer events on the infoBox from propagating to the document
+    this.infoBox.addEventListener("mouseenter", (e) => e.stopPropagation());
     document.body.appendChild(this.infoBox);
 
     // Set up raycaster and mouse vector for interaction
@@ -64,7 +66,6 @@ export class World {
         if (node.type === "ship") {
           pos.set(0, 0, 0);
         } else if (node.type === "router") {
-          // Place the router at the center (or adjust as desired)
           pos.set(0, 0, 0);
         } else if (node.type === "device") {
           pos.set(Math.random() * 20 - 10, Math.random() * 20 - 10, Math.random() * 20 - 10);
@@ -95,7 +96,7 @@ export class World {
         this.nodeRegistry.set(node.id, mesh);
         this.scene.add(mesh);
       } else {
-        // Update node metadata if needed
+        // Update node metadata and color if needed
         mesh.userData = { ...node };
         const newColor = node.color ? new THREE.Color(node.color).getHex() : 0xffffff;
         mesh.material.color.setHex(newColor);
@@ -134,14 +135,26 @@ export class World {
     });
   }
 
-  // Handle mouse movement to display node details on hover
+  // Updated onMouseMove: do not hide infoBox if the mouse is over it
   onMouseMove(event) {
+    // Check if the mouse is currently over the infoBox
+    const rect = this.infoBox.getBoundingClientRect();
+    if (
+      this.infoBox.style.display === "block" &&
+      event.clientX >= rect.left &&
+      event.clientX <= rect.right &&
+      event.clientY >= rect.top &&
+      event.clientY <= rect.bottom
+    ) {
+      // Do nothing so that the box remains visible and interactive.
+      return;
+    }
+
     // Update mouse vector for raycasting
     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-    // For raycasting, we need the camera.
-    // (A temporary solution: expose the camera as window.camera from main.js)
+    // Use the global camera (exposed from main.js) for raycasting
     if (!window.camera) return;
     this.raycaster.setFromCamera(this.mouse, window.camera);
     const intersects = this.raycaster.intersectObjects(Array.from(this.nodeRegistry.values()));
@@ -152,15 +165,57 @@ export class World {
     }
   }
 
+  // Display the node info along with a "Scan Ports" button if appropriate.
+  // Also update the info box with scan results and update the node on the map.
   showNodeInfo(node, event) {
     const data = node.userData;
+    // Check if the node's id looks like an IP address (and isn't the ship)
+    const ipRegex = /^(?:\d{1,3}\.){3}\d{1,3}$/;
+    let scanButtonHtml = "";
+    if (ipRegex.test(data.id) && data.type !== "ship") {
+      scanButtonHtml = `<button id="portScanButton">Scan Ports</button>`;
+    }
+    // Basic info display plus an empty container for scan results.
     this.infoBox.innerHTML = `
       <strong>${data.label || "Unknown"}</strong><br>
       MAC: ${data.mac || "N/A"}<br>
       Role: ${data.role || "N/A"}<br>
+      ${scanButtonHtml}
+      <div id="scanResults"></div>
     `;
     this.infoBox.style.left = `${event.clientX + 10}px`;
     this.infoBox.style.top = `${event.clientY + 10}px`;
     this.infoBox.style.display = "block";
+
+    // If a Scan Ports button was added, attach a click listener.
+    if (scanButtonHtml) {
+      const portScanButton = this.infoBox.querySelector("#portScanButton");
+      portScanButton.addEventListener("click", async () => {
+        try {
+          // Disable the button and indicate progress.
+          portScanButton.disabled = true;
+          portScanButton.innerText = "Scanning...";
+          // Call the backend endpoint to perform the port scan.
+          const response = await fetch(`http://localhost:5000/scan_ports?ip=${data.id}`);
+          const result = await response.json();
+          // Update the node's metadata with the open ports.
+          node.userData.open_ports = result.ports;
+          // Update the info box to display the scan results.
+          const scanResultsDiv = this.infoBox.querySelector("#scanResults");
+          scanResultsDiv.innerHTML = `<br><strong>Open Ports:</strong> ${result.ports.length > 0 ? result.ports.join(", ") : "None found"}`;
+          // Optionally, update the node's appearance on the map.
+          if (result.ports.length > 0) {
+            // For example, change the node's color to yellow.
+            node.material.color.set(0xffff00);
+          }
+        } catch (err) {
+          const scanResultsDiv = this.infoBox.querySelector("#scanResults");
+          scanResultsDiv.innerHTML = `<br><strong>Error scanning ports:</strong> ${err}`;
+        } finally {
+          portScanButton.disabled = false;
+          portScanButton.innerText = "Scan Ports";
+        }
+      }, { once: true });
+    }
   }
 }

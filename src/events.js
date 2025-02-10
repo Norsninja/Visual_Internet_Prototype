@@ -14,34 +14,80 @@ export class EventsManager {
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
     
-    // Bind mouse move event
-    document.addEventListener("mousemove", this.handleMouseMove.bind(this), false);
-  }
-  
-  handleMouseMove(event) {
-    // Check if mouse is over the UI info box; if so, do nothing.
-    const rect = this.uiManager.infoBox.getBoundingClientRect();
-    if (
-      this.uiManager.infoBox.style.display === "block" &&
-      event.clientX >= rect.left &&
-      event.clientX <= rect.right &&
-      event.clientY >= rect.top &&
-      event.clientY <= rect.bottom
-    ) {
-      return;
-    }
+    // Store the currently selected node.
+    this.selectedNode = null;
     
-    // Update mouse vector for raycasting
+   
+    // Bind click event to handle selection/deselection.
+    document.addEventListener("click", this.handleClick.bind(this), false);
+  }
+  resetSelection(skipUI = false) {
+    console.log("Resetting selection...");
+    
+    if (this.selectedNode) {
+        console.log("Previous selected node:", this.selectedNode.userData.id);
+
+        if (this.selectedNode.material) {
+            if (this.selectedNode.userData.originalColor !== undefined) {
+                console.log("Restoring color to:", this.selectedNode.userData.originalColor);
+                this.selectedNode.material.color.setHex(this.selectedNode.userData.originalColor);
+            } else {
+                console.warn("Previous node missing original color!", this.selectedNode.userData.id);
+                this.selectedNode.material.color.setHex(0xffffff);
+            }
+        }
+
+        this.selectedNode = null;
+        if (!skipUI) {  // Only hide UI when not scanning
+            this.uiManager.hideInfo();
+        }
+    }
+}
+
+
+ 
+handleClick(event) {
+    console.log("Handling click event...");
+
+    // ✅ Ignore clicks on UI elements
+    if (event.target.closest("#uiContainer")) {
+        console.log("Click ignored: UI element was clicked.");
+        return;
+    }
+
     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-    
+
+    this.nodesManager.getNodesArray().forEach(node => node.updateMatrixWorld(true));
+
     this.raycaster.setFromCamera(this.mouse, this.camera);
     const nodesArray = this.nodesManager.getNodesArray();
     const intersects = this.raycaster.intersectObjects(nodesArray);
+
+    console.log("Intersections found:", intersects.length);
+
     if (intersects.length > 0) {
-      this.uiManager.showInfo(intersects[0].object, event);
+        const clickedNode = intersects[0].object;
+        console.log("Clicked node:", clickedNode.userData.id);
+
+        if (!clickedNode.userData.originalColor) {
+            clickedNode.userData.originalColor = clickedNode.material.color.getHex();
+        }
+
+        if (this.selectedNode && this.selectedNode !== clickedNode) {
+            if (this.selectedNode.userData.originalColor !== undefined) {
+                this.selectedNode.material.color.setHex(this.selectedNode.userData.originalColor);
+            }
+        }
+
+        this.selectedNode = clickedNode;
+        clickedNode.material.color.set(0xffffff);
+        window.selectedNode = this.selectedNode;
+        this.uiManager.showInfo(clickedNode, event);
     } else {
-      this.uiManager.hideInfo();
+        console.log("No node clicked, resetting selection.");
+        this.resetSelection();
     }
-  }
+}
+
 }

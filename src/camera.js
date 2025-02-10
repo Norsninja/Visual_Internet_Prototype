@@ -27,6 +27,9 @@ export class CameraController {
   }
 
   update() {
-    this.controls.update();
-  }
+    if (this.controls.autoRotate || this.controls.enableDamping) {
+        this.controls.update();
+    }
+    }
+
 }

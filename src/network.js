@@ -11,16 +11,28 @@ export class NetworkManager {
     }
     
     async fetchNetworkData() {
-      try {
-        const response = await fetch(this.endpoint);
-        const data = await response.json();
-        // Update nodes and edges using the fetched data
-        this.nodesManager.updateNodes(data.nodes);
-        this.edgesManager.updateEdges(data.edges);
-      } catch (error) {
-        console.error('Error fetching network data:', error);
-      }
+        try {
+            const response = await fetch(this.endpoint);
+            const data = await response.json();
+            
+            this.nodesManager.updateNodes(data.nodes);
+            this.edgesManager.updateEdges(data.edges);
+    
+            // Find router dynamically (assumes type="router")
+            const routerNode = data.nodes.find(node => node.type === "router");
+    
+            if (routerNode && window.ship && !window.shipInitialized) {
+                console.log("Router found at:", routerNode.id);
+                window.ship.setInitialOrbit(routerNode);
+                window.shipInitialized = true;  // Prevents multiple resets
+            }
+            
+    
+        } catch (error) {
+            console.error('Error fetching network data:', error);
+        }
     }
+    
     
     startPeriodicUpdates(intervalMs = 10000) {
       this.fetchNetworkData(); // initial call

@@ -11,7 +11,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 # Import Scapy functions
-from scapy.all import IP, TCP, sr, send
+from scapy.all import IP, TCP, sr, send, ICMP, sr1
 
 logging.basicConfig(level=logging.INFO)
 
@@ -88,18 +88,31 @@ def get_asn_info(ip):
         logging.error("Error getting ASN info for %s: %s", ip, e)
         return "Unknown"
 
+mac_cache = {}  # Store MAC addresses to avoid infinite retries
+
 def get_mac(ip):
-    """Retrieve the MAC address for a local network device."""
+    """Retrieve the MAC address for a local network device with retry limits."""
     if not ip.startswith(("192.168.", "10.", "172.")):
         return "Unavailable (External Network)"
+
+    # If we've already failed to find this MAC, return "Unknown" without retrying forever
+    if ip in mac_cache and mac_cache[ip] is None:
+        return "Unknown"
+
     try:
         result = subprocess.run(["arp", "-a"], capture_output=True, text=True, shell=True)
         for line in result.stdout.split("\n"):
             if ip in line:
                 mac_match = re.search(r"([0-9A-Fa-f:-]{17})", line)
-                return mac_match.group(0) if mac_match else "Unknown"
+                if mac_match:
+                    mac_cache[ip] = mac_match.group(0)  # Cache the result
+                    return mac_match.group(0)
+
     except Exception as e:
         logging.error("Error getting MAC for %s: %s", ip, e)
+
+    # If no MAC is found, cache the failure and return "Unknown"
+    mac_cache[ip] = None
     return "Unknown"
 
 ### NEW PORT SCANNER USING SCAPY ###
@@ -150,15 +163,6 @@ def update_graph_data():
         nodes = []
         edges = []
 
-        # Add Main "Ship" Node
-        nodes.append({
-            "id": "My Ship",
-            "label": "Explorer Ship",
-            "color": "blue",
-            "mac": "N/A",
-            "role": "User Device",
-            "type": "ship"
-        })
 
         # Add Router/Gateway Node
         nodes.append({
@@ -169,7 +173,6 @@ def update_graph_data():
             "role": "Router",
             "type": "router"
         })
-        edges.append({"source": "My Ship", "target": gateway_ip})
 
         # Add Local Devices
         for device in devices:

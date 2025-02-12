@@ -86,85 +86,86 @@ export class NodesManager {
 
 
 applyForces(edgesData) {
-  const damping = 0.85;
-  const repulsionStrength = 20;
-  const springStrength = 0.01;
-  const equilibriumDistance = 40;
-  const externalPushStrength = 0.01;
-
-  const forces = new Map();
-  let routerNode = Array.from(this.nodeRegistry.values()).find(n => n.userData?.type === "router");
-
-  this.nodeRegistry.forEach((mesh, id) => {
-      if (mesh.userData?.type !== "child") {
-          forces.set(id, new THREE.Vector3());
-      }
-  });
-
-  this.nodeRegistry.forEach((meshA, idA) => {
-      if (meshA.userData?.type === "child") return;
-
-      this.nodeRegistry.forEach((meshB, idB) => {
-          if (idA !== idB && meshB.userData?.type !== "child") {
-              let force = new THREE.Vector3().subVectors(meshA.position, meshB.position);
-              let distance = force.length() + 0.1;
-              force.normalize().multiplyScalar(repulsionStrength / (distance * distance));
-              forces.get(idA).add(force);
-          }
-      });
-  });
-
-  edgesData.forEach(edge => {
-      let meshA = this.nodeRegistry.get(edge.source);
-      let meshB = this.nodeRegistry.get(edge.target);
-      if (!meshA || !meshB) return;
-
-      let force = new THREE.Vector3().subVectors(meshB.position, meshA.position);
-      let distance = force.length();
-      let stretch = distance - equilibriumDistance;
-      force.normalize().multiplyScalar(springStrength * stretch);
-
-      forces.get(edge.source).add(force);
-      forces.get(edge.target).sub(force);
-  });
-
-  // ✅ Push external nodes outward from the router
-  this.nodeRegistry.forEach((mesh, id) => {
-      if (mesh.userData?.type === "external" && routerNode) {
-          let direction = new THREE.Vector3().subVectors(mesh.position, routerNode.position).normalize();
-          direction.multiplyScalar(externalPushStrength);
-          forces.get(id).add(direction);
-      }
-  });
-
-  this.nodeRegistry.forEach((mesh, id) => {
-      if (mesh.userData?.type !== "child") {
-          let velocity = this.velocity.get(id) || new THREE.Vector3();
-          let force = forces.get(id);
-          velocity.add(force);
-          velocity.multiplyScalar(damping);
-          mesh.position.add(velocity);
-          this.velocity.set(id, velocity);
-      }
-  });
-
-  this.nodeRegistry.forEach(childMesh => {
-    if (childMesh.userData?.type === "child") {
-        // For dynamic orbiting, you might update the angle over time
-        let parentMesh = this.nodeRegistry.get(childMesh.userData.parentId);
-        if (parentMesh) {
-            let orbitRadius = 8;
-            // Compute a new angle based on time or other factors:
-            let angle = (2 * Math.PI * childMesh.userData.port) / 1;  // Adjust as needed
-            childMesh.position.set(
-                Math.cos(angle) * orbitRadius,
-                Math.sin(angle) * orbitRadius,
-                0
-            );
-            // Note: No need to add parent's position; that's handled by the scene graph.
+    const damping = 0.85;
+    const repulsionStrength = 20;
+    const springStrength = 0.01;
+    const equilibriumDistance = 40;
+    const externalPushStrength = 0.01;
+  
+    const forces = new Map();
+  
+    // First, initialize forces for non-child nodes.
+    this.nodeRegistry.forEach((mesh, id) => {
+        // If this is the router, skip force accumulation.
+        if (mesh.userData?.type === "router") {
+            forces.set(id, new THREE.Vector3());
+            return;
         }
-    }
-});
+        forces.set(id, new THREE.Vector3());
+    });
+  
+    // Calculate repulsion forces (skip router if necessary).
+    this.nodeRegistry.forEach((meshA, idA) => {
+        if (meshA.userData?.type === "child" || meshA.userData?.type === "router") return;
+  
+        this.nodeRegistry.forEach((meshB, idB) => {
+            if (idA !== idB && meshB.userData?.type !== "child") {
+                let force = new THREE.Vector3().subVectors(meshA.position, meshB.position);
+                let distance = force.length() + 0.1;
+                force.normalize().multiplyScalar(repulsionStrength / (distance * distance));
+                forces.get(idA).add(force);
+            }
+        });
+    });
+  
+    // Process spring forces for edges (apply to all nodes except children).
+    edgesData.forEach(edge => {
+        let meshA = this.nodeRegistry.get(edge.source);
+        let meshB = this.nodeRegistry.get(edge.target);
+        if (!meshA || !meshB) return;
+        let force = new THREE.Vector3().subVectors(meshB.position, meshA.position);
+        let distance = force.length();
+        let stretch = distance - equilibriumDistance;
+        force.normalize().multiplyScalar(springStrength * stretch);
+  
+        // Note: If one of these nodes is the router and you want it fixed,
+        // you might choose not to apply forces to it.
+        if (meshA.userData?.type !== "router") {
+          forces.get(edge.source).add(force);
+        }
+        if (meshB.userData?.type !== "router") {
+          forces.get(edge.target).sub(force);
+        }
+    });
+  
+    // External push forces, etc.
+    this.nodeRegistry.forEach((mesh, id) => {
+        if (mesh.userData?.type === "external" && this.getNodeById("router")) { // assuming router has an id "router"
+            let routerMesh = this.getNodeById("router");
+            let direction = new THREE.Vector3().subVectors(mesh.position, routerMesh.position).normalize();
+            direction.multiplyScalar(externalPushStrength);
+            forces.get(id).add(direction);
+        }
+    });
+  
+    // Finally update the positions based on forces.
+    this.nodeRegistry.forEach((mesh, id) => {
+        if (mesh.userData?.type === "router") {
+            // Force the router to stay at (0,0,0)
+            mesh.position.set(0, 0, 0);
+            this.velocity.set(id, new THREE.Vector3()); // optionally zero out its velocity
+        } else if (mesh.userData?.type !== "child") {
+            let velocity = this.velocity.get(id) || new THREE.Vector3();
+            let force = forces.get(id);
+            velocity.add(force);
+            velocity.multiplyScalar(damping);
+            mesh.position.add(velocity);
+            this.velocity.set(id, velocity);
+        }
+    });
+  
+
+  
 
 }
 

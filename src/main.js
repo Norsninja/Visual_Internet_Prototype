@@ -39,7 +39,11 @@ const uiManager = new UIManager();
 const eventsManager = new EventsManager(window.camera, nodesManager, uiManager, ship);
 const networkManager = new NetworkManager(nodesManager, edgesManager);
 networkManager.startPeriodicUpdates(10000);
-
+const routerNode = nodesManager.getNodeById("router"); // Make sure your router node has the ID "router"
+if (routerNode) {
+  // Position the ship in orbit around the router's center
+  ship.setOrbitAroundNode(routerNode.getWorldPosition(new THREE.Vector3()));
+}
 window.uiManager = uiManager;
 window.maxTravelDistance = 500;
 window.nodesManager = nodesManager;

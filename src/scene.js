@@ -2,20 +2,22 @@
 import * as THREE from 'three';
 
 export class SceneManager {
-  constructor() {
+  constructor(backgroundColor = 0x000000) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x000000);
+    this.setBackground(backgroundColor);
   }
-  
-  getScene() {
-    return this.scene;
+
+  addObjects(objects = []) {
+    objects.forEach(obj => this.scene.add(obj));
   }
-  
-  addObject(object) {
-    this.scene.add(object);
+
+  removeObjects(objects = []) {
+    objects.forEach(obj => this.scene.remove(obj));
   }
-  
-  removeObject(object) {
-    this.scene.remove(object);
+
+  setBackground(colorHex) {
+    this.scene.background = new THREE.Color(colorHex);
   }
 }
+
+

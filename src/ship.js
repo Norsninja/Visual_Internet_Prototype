@@ -1,130 +1,143 @@
 import * as THREE from 'three';
 import { Tween, Easing } from '@tweenjs/tween.js';
-import * as TWEEN from '@tweenjs/tween.js';
 
 export class Ship {
   constructor(tweenGroup) {
-    // Create the ship's mesh with proper initial orientation
-    const geometry = new THREE.ConeGeometry(2, 4, 16);
-    const material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.position.set(0, 0, 0);
-    this.mesh.rotation.set(0, Math.PI / 2, 0); // Correct initial alignment
+    this.tweenGroup = tweenGroup;
+    this.shipContainer = new THREE.Group(); // Holds exterior and cockpit
 
-    this.mesh.name = "Ship";
+    // Exterior Mesh
+    this.shipExterior = this.createShipMesh();
+    this.shipContainer.add(this.shipExterior);
 
+    // Placeholder Cockpit (Invisible for now)
+    this.cockpit = new THREE.Object3D();
+    this.cockpit.position.set(0, 0, 0);
+    this.shipContainer.add(this.cockpit);
+
+    this.currentView = 'external';
     this.previousPosition = new THREE.Vector3();
     this.targetQuaternion = new THREE.Quaternion();
-    this.tweenGroup = tweenGroup;
+  }
+
+  createShipMesh() {
+    const geometry = new THREE.ConeGeometry(2, 4, 16);
+    const material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(0, 0, 0);
+    mesh.rotation.set(0, Math.PI / 2, 0);
+    mesh.name = "Ship";
+    return mesh;
   }
 
   getMesh() {
-    return this.mesh;
+    return this.shipContainer;
   }
 
-  travelTo(targetPosition, duration = 2000) {
-    console.log("Ship is moving from:", this.mesh.position, "to", targetPosition);
-
-    // Store initial position and orientation
-    this.previousPosition.copy(this.mesh.position);
-    const startQuaternion = this.mesh.quaternion.clone();
-
-    // Compute the direction vector (where the ship should face)
+  travelTo(target, duration = 2000) {
+    // If target is an Object3D, compute its world position
+    let targetPosition = target instanceof THREE.Object3D 
+      ? target.getWorldPosition(new THREE.Vector3())
+      : target;
+  
+    console.log("Ship is moving from:", this.shipContainer.position, "to", targetPosition);
+    this.previousPosition.copy(this.shipContainer.position);
+  
+    // Determine the direction and target quaternion for the ship
     const direction = new THREE.Vector3()
-      .subVectors(targetPosition, this.mesh.position)
+      .subVectors(targetPosition, this.shipContainer.position)
       .normalize();
-
-    // Create target quaternion to face direction
+  
     const lookAtMatrix = new THREE.Matrix4();
-    lookAtMatrix.lookAt(targetPosition, this.mesh.position, this.mesh.up);
+    lookAtMatrix.lookAt(targetPosition, this.shipContainer.position, this.shipContainer.up);
     const targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(lookAtMatrix);
-
-    // Rotate the ship BEFORE moving
-    const rotationTween = new Tween(this.mesh.quaternion, this.tweenGroup)
-      .to({ x: targetQuaternion.x, y: targetQuaternion.y, z: targetQuaternion.z, w: targetQuaternion.w }, duration / 2)
+  
+    // Tween rotation first
+    const rotationTween = new Tween(this.shipContainer.quaternion, this.tweenGroup)
+      .to({ 
+        x: targetQuaternion.x, 
+        y: targetQuaternion.y, 
+        z: targetQuaternion.z, 
+        w: targetQuaternion.w 
+      }, duration / 2)
       .easing(Easing.Quadratic.Out)
-      .onUpdate(() => {
-        this.mesh.updateMatrixWorld(true);
-      })
+      .onUpdate(() => this.shipContainer.updateMatrixWorld(true))
       .start();
-
-    // Wait for rotation to complete, then move the ship
+  
+    // Delay the position tween until rotation is underway
     setTimeout(() => {
-      new Tween(this.mesh.position, this.tweenGroup)
-        .to({ x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }, duration)
+      new Tween(this.shipContainer.position, this.tweenGroup)
+        .to({ 
+          x: targetPosition.x, 
+          y: targetPosition.y, 
+          z: targetPosition.z 
+        }, duration)
         .easing(Easing.Quadratic.Out)
-        .onUpdate(() => {
-          this.mesh.updateMatrixWorld(true);
-        })
+        .onUpdate(() => this.shipContainer.updateMatrixWorld(true))
         .onComplete(() => {
-          console.log("Ship arrived at:", this.mesh.position);
+          console.log("Ship arrived at:", this.shipContainer.position);
           if (window.uiManager) {
             window.uiManager.updateTravelStatus("Arrived!");
           }
-
-          // ✅ Place ship in orbit around the destination node
           this.setOrbitAroundNode(targetPosition);
         })
         .start();
-    }, duration / 2); // Move after rotation completes
-  }
-
-
-setInitialOrbit(routerNode) {
-  if (!routerNode) {
-      console.warn("No router node found, cannot set ship orbit.");
-      return;
+    }, duration / 2);
   }
   
-  if (this.initialized) {
-      console.log("Ship already initialized, skipping orbit placement.");
+
+  setOrbitAroundNode(nodePosition) {
+    if (!nodePosition) {
+      console.warn("No valid node position found for orbit.");
       return;
+    }
+
+
+    this.orbitTarget = nodePosition;  // Save the node reference for continuous tracking
+    this.orbitRadius = 4;
+    this.orbitAngle = Math.random() * Math.PI * 2;
+    
+
+    console.log("Ship placed in orbit at:", this.shipContainer.position);
   }
 
-  // Convert router position to Vector3
-  const routerPos = new THREE.Vector3(routerNode.x || 0, routerNode.y || 0, routerNode.z || 0);
-
-  // Compute orbital position (fixed radius)
-  const orbitRadius = 1;
-  const angle = Math.random() * Math.PI * 2;
-
-  const shipX = routerPos.x + orbitRadius * Math.cos(angle);
-  const shipY = routerPos.y + orbitRadius * Math.sin(angle);
-  const shipZ = routerPos.z;
-
-  // Set ship position
-  this.mesh.position.set(shipX, shipY, shipZ);
-  console.log("Ship placed in orbit around router at:", this.mesh.position);
-
-  //  Mark the ship as initialized
-  this.initialized = true;
-}
-setOrbitAroundNode(nodePosition) {
-  if (!nodePosition) {
-    console.warn("No valid node position found for orbit.");
-    return;
+  switchView() {
+    if (this.currentView === 'external') {
+      this.enterCockpit();
+    } else {
+      this.exitCockpit();
+    }
   }
 
-  // Compute a small orbital position around the node
-  const orbitRadius = 5;
-  const angle = Math.random() * Math.PI * 2;
+  enterCockpit() {
+    this.currentView = 'cockpit';
+    console.log("Entering cockpit view");
 
-  const orbitX = nodePosition.x + orbitRadius * Math.cos(angle);
-  const orbitY = nodePosition.y + orbitRadius * Math.sin(angle);
-  const orbitZ = nodePosition.z;
+    if (window.cameraController) {
+      window.cameraController.camera.position.set(
+        this.shipContainer.position.x,
+        this.shipContainer.position.y,
+        this.shipContainer.position.z
+      );
+      window.cameraController.controls.target.set(
+        this.shipContainer.position.x,
+        this.shipContainer.position.y,
+        this.shipContainer.position.z + 1
+      );
+    }
+  }
 
-  // Move ship into orbit position
-  this.mesh.position.set(orbitX, orbitY, orbitZ);
+  exitCockpit() {
+    this.currentView = 'external';
+    console.log("Exiting cockpit view");
 
-  // Ensure ship tip faces the node
-  this.mesh.lookAt(new THREE.Vector3(nodePosition.x, nodePosition.y, nodePosition.z));
-
-
-  console.log("Ship placed in orbit around node at:", this.mesh.position);
-}
-
-
-
-
-
+    if (window.cameraController) {
+      window.cameraController.camera.position.set(
+        this.shipContainer.position.x,
+        this.shipContainer.position.y + 20,
+        this.shipContainer.position.z + 50
+      );
+      window.cameraController.controls.target.copy(this.shipContainer.position);
+    }
+  }
 }

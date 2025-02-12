@@ -3,176 +3,239 @@ import * as THREE from 'three';
 export class NodesManager {
   constructor(scene) {
     this.scene = scene;
-    this.nodeRegistry = new Map();   // key: node.id, value: mesh
-    this.nodePositions = new Map();  // key: node.id, value: THREE.Vector3
-    this.velocity = new Map();  // key: node.id, value: THREE.Vector3 (for smooth movement)
+    this.nodeRegistry = new Map();  // Stores meshes by ID
+    this.nodePositions = new Map(); // Stores persistent positions
+    this.velocity = new Map();      // Smooth physics updates
+    this.missedUpdates = new Map(); // Tracks how many times a node was missing
   }
 
-  updateNodes(nodesData) {
-    const currentNodeIds = new Set(nodesData.map(node => node.id));
-
-    // Remove obsolete nodes (but keep child nodes)
-    for (let [nodeId, mesh] of this.nodeRegistry.entries()) {
-      if (!currentNodeIds.has(nodeId) && mesh.userData.type !== "child") {
-        this.scene.remove(mesh);
-        this.nodeRegistry.delete(nodeId);
-        this.nodePositions.delete(nodeId);
-        this.velocity.delete(nodeId);
-      }
-    }
+  updateNodes(nodesData, { preservePositions = true } = {}) {
+    const updatedIds = new Set();
+    let routerNode = Array.from(this.nodeRegistry.values()).find(n => n.userData?.type === "router");
 
     nodesData.forEach(node => {
-      let mesh = this.nodeRegistry.get(node.id);
-      if (!this.nodePositions.has(node.id)) {
-        // Random initial position for the force-directed graph
-        this.nodePositions.set(node.id, new THREE.Vector3(
-          (Math.random() - 0.5) * 100,
-          (Math.random() - 0.5) * 100,
-          (Math.random() - 0.5) * 100
-        ));
-        this.velocity.set(node.id, new THREE.Vector3());
-      }
+        updatedIds.add(node.id);
+        let mesh = this.nodeRegistry.get(node.id);
 
-      if (!mesh) {
-        const geometry = new THREE.SphereGeometry(2, 16, 16);
-        const material = new THREE.MeshBasicMaterial({ color: node.color || 0xffffff });
-        mesh = new THREE.Mesh(geometry, material);
-        this.scene.add(mesh);
-        this.nodeRegistry.set(node.id, mesh);
-      }
+        if (!mesh) {
+            console.log(`Adding new node: ${node.id}`);
+            const geometry = new THREE.SphereGeometry(2, 16, 16);
+            const material = new THREE.MeshBasicMaterial({ color: node.color || 0xffffff });
+            mesh = new THREE.Mesh(geometry, material);
+            this.scene.add(mesh);
+            this.nodeRegistry.set(node.id, mesh);
 
-      if (!mesh.userData.originalColor) {
-        mesh.userData.originalColor = mesh.material.color.getHex();
-    }
-
-    // Merge instead of replacing userData
-    mesh.userData = { ...mesh.userData, ...node };
-    });
-  }
-
-  applyForces(edgesData) {
-    const damping = 0.85; // Prevents jittering
-    const repulsionStrength = 100;
-    const springStrength = 0.1;
-    const equilibriumDistance = 30;
-
-    const forces = new Map();
-
-    // Initialize forces for non-child nodes
-    this.nodePositions.forEach((_, id) => {
-        if (this.nodeRegistry.get(id)?.userData?.type !== "child") {
-            forces.set(id, new THREE.Vector3());
-        }
-    });
-
-    // Repulsion force (Coulomb's Law) - Ignore child nodes
-    this.nodePositions.forEach((posA, idA) => {
-        if (this.nodeRegistry.get(idA)?.userData?.type === "child") return;
-        
-        this.nodePositions.forEach((posB, idB) => {
-            if (idA !== idB && this.nodeRegistry.get(idB)?.userData?.type !== "child") {
-                let force = new THREE.Vector3().subVectors(posA, posB);
-                let distance = force.length() + 0.1;
-                force.normalize().multiplyScalar(repulsionStrength / (distance * distance));
-                forces.get(idA).add(force);
+            // ✅ Fix: Keep the router locked at (0,0,0)
+            if (node.type === "router") {
+                this.nodePositions.set(node.id, new THREE.Vector3(0, 0, 0));
             }
-        });
-    });
+            // ✅ Local nodes: Cluster **near** the router in 3D
+            else if (node.type === "device" && routerNode) {
+                let angle = Math.random() * Math.PI * 2;
+                let radius = 30 + Math.random() * 20;
+                let zOffset = (Math.random() - 0.5) * 20; // **Subtle** Z spread
 
-    // Spring force (Hooke's Law) - Ignore child nodes
-    edgesData.forEach(edge => {
-        let posA = this.nodePositions.get(edge.source);
-        let posB = this.nodePositions.get(edge.target);
-        if (!posA || !posB) return;
-        if (this.nodeRegistry.get(edge.source)?.userData?.type === "child" || 
-            this.nodeRegistry.get(edge.target)?.userData?.type === "child") return;
-
-        let force = new THREE.Vector3().subVectors(posB, posA);
-        let distance = force.length();
-        let stretch = distance - equilibriumDistance;
-        force.normalize().multiplyScalar(springStrength * stretch);
-
-        forces.get(edge.source).add(force);
-        forces.get(edge.target).sub(force);
-    });
-
-    // Apply forces - Ignore child nodes
-    this.nodePositions.forEach((pos, id) => {
-        if (this.nodeRegistry.get(id)?.userData?.type === "child") return;
-        
-        let velocity = this.velocity.get(id);
-        let force = forces.get(id);
-
-        velocity.add(force);
-        velocity.multiplyScalar(damping);
-        pos.add(velocity);
-    });
-
-    // Update mesh positions for non-child nodes
-    this.nodeRegistry.forEach((mesh, id) => {
-        if (this.nodeRegistry.get(id)?.userData?.type !== "child") {
-            mesh.position.copy(this.nodePositions.get(id));
-        }
-    });
-
-    // Update child node positions to follow their parent
-    this.nodeRegistry.forEach((childMesh, childId) => {
-        if (childMesh.userData?.type === "child") {
-            let parentMesh = this.nodeRegistry.get(childMesh.userData.parentId);
-            if (parentMesh && parentMesh.userData.open_ports) {  //  Ensure open_ports exists
-                let numPorts = parentMesh.userData.open_ports.length || 1;  //  Avoid division by zero
-                let angle = (2 * Math.PI * childMesh.userData.port) / numPorts;
-                let orbitRadius = 8;
-                let childPos = new THREE.Vector3(
-                    parentMesh.position.x + Math.cos(angle) * orbitRadius,
-                    parentMesh.position.y + Math.sin(angle) * orbitRadius,
-                    parentMesh.position.z
+                let pos = new THREE.Vector3(
+                    routerNode.position.x + radius * Math.cos(angle),
+                    routerNode.position.y + radius * Math.sin(angle),
+                    routerNode.position.z + zOffset
                 );
-                childMesh.position.copy(childPos);
-            } else {
-                console.warn(`Parent node missing open_ports:`, parentMesh);
+                this.nodePositions.set(node.id, pos);
+            }
+            // ✅ External nodes: Further away, but still **stabilized**
+            else {
+                let angle = Math.random() * Math.PI * 2;
+                let radius = 100 + Math.random() * 50;
+                let zOffset = (Math.random() - 0.5) * 50; // **Controlled** spread
+
+                let pos = new THREE.Vector3(
+                    radius * Math.cos(angle),
+                    radius * Math.sin(angle),
+                    routerNode ? routerNode.position.z + zOffset : zOffset
+                );
+                this.nodePositions.set(node.id, pos);
+            }
+
+            this.velocity.set(node.id, new THREE.Vector3());
+        }
+
+        mesh.userData = { ...mesh.userData, ...node };
+        mesh.material.color.set(mesh.userData.color);
+
+        if (preservePositions && this.nodePositions.has(node.id)) {
+            mesh.position.copy(this.nodePositions.get(node.id));
+        }
+
+        this.missedUpdates.set(node.id, 0);
+
+        // ✅ Automatically create the external port moon (Red sphere)
+        if (node.type === "router" && node.open_external_port) {
+            console.log(`Router ${node.id} has an open external port: ${node.open_external_port}`);
+            
+            // Ensure this port isn't already visualized
+            let portMoonId = `external-port-${node.open_external_port}`;
+            if (!this.nodeRegistry.has(portMoonId)) {
+                this.spawnChildNodes(mesh, [node.open_external_port]); // Pass the external port
             }
         }
-    });
-  }
-
-  spawnChildNodes(parentNode, openPorts) {
-    console.log(`Spawning child nodes for ${parentNode.userData.id} with ports:`, openPorts);
-
-    const parentPos = parentNode.position.clone();
-    const orbitRadius = 5;
-    const numPorts = openPorts.length;
-
-    openPorts.forEach((port, index) => {
-        console.log(`Creating moon for port: ${port}, index: ${index}`);
-
-        const angle = (2 * Math.PI * index) / numPorts;
-        const childX = parentPos.x + orbitRadius * Math.cos(angle);
-        const childY = parentPos.y + orbitRadius * Math.sin(angle);
-        const childZ = parentPos.z + orbitRadius * Math.cos(angle);
-        const childPos = new THREE.Vector3(childX, childY, childZ);
-
-        const childSize = 0.5;
-        const geometry = new THREE.SphereGeometry(childSize, 16, 16);
-        const material = new THREE.MeshBasicMaterial({ color: 0xaaaaaa });
-        const childMesh = new THREE.Mesh(geometry, material);
-        childMesh.position.copy(childPos);
-
-        const childId = `${parentNode.userData.id}-port-${port}`;
-        childMesh.userData = {
-            id: childId,
-            label: `Port ${port}`,
-            type: "child",
-            port: port,
-            parentId: parentNode.userData.id,
-        };
-
-        console.log(`Adding moon: ${childId} at position`, childMesh.position);
-
-        this.nodeRegistry.set(childId, childMesh);
-        this.scene.add(childMesh);
     });
 }
+
+
+
+
+
+applyForces(edgesData) {
+  const damping = 0.85;
+  const repulsionStrength = 20;
+  const springStrength = 0.01;
+  const equilibriumDistance = 40;
+  const externalPushStrength = 0.01;
+
+  const forces = new Map();
+  let routerNode = Array.from(this.nodeRegistry.values()).find(n => n.userData?.type === "router");
+
+  this.nodeRegistry.forEach((mesh, id) => {
+      if (mesh.userData?.type !== "child") {
+          forces.set(id, new THREE.Vector3());
+      }
+  });
+
+  this.nodeRegistry.forEach((meshA, idA) => {
+      if (meshA.userData?.type === "child") return;
+
+      this.nodeRegistry.forEach((meshB, idB) => {
+          if (idA !== idB && meshB.userData?.type !== "child") {
+              let force = new THREE.Vector3().subVectors(meshA.position, meshB.position);
+              let distance = force.length() + 0.1;
+              force.normalize().multiplyScalar(repulsionStrength / (distance * distance));
+              forces.get(idA).add(force);
+          }
+      });
+  });
+
+  edgesData.forEach(edge => {
+      let meshA = this.nodeRegistry.get(edge.source);
+      let meshB = this.nodeRegistry.get(edge.target);
+      if (!meshA || !meshB) return;
+
+      let force = new THREE.Vector3().subVectors(meshB.position, meshA.position);
+      let distance = force.length();
+      let stretch = distance - equilibriumDistance;
+      force.normalize().multiplyScalar(springStrength * stretch);
+
+      forces.get(edge.source).add(force);
+      forces.get(edge.target).sub(force);
+  });
+
+  // ✅ Push external nodes outward from the router
+  this.nodeRegistry.forEach((mesh, id) => {
+      if (mesh.userData?.type === "external" && routerNode) {
+          let direction = new THREE.Vector3().subVectors(mesh.position, routerNode.position).normalize();
+          direction.multiplyScalar(externalPushStrength);
+          forces.get(id).add(direction);
+      }
+  });
+
+  this.nodeRegistry.forEach((mesh, id) => {
+      if (mesh.userData?.type !== "child") {
+          let velocity = this.velocity.get(id) || new THREE.Vector3();
+          let force = forces.get(id);
+          velocity.add(force);
+          velocity.multiplyScalar(damping);
+          mesh.position.add(velocity);
+          this.velocity.set(id, velocity);
+      }
+  });
+
+  this.nodeRegistry.forEach(childMesh => {
+    if (childMesh.userData?.type === "child") {
+        // For dynamic orbiting, you might update the angle over time
+        let parentMesh = this.nodeRegistry.get(childMesh.userData.parentId);
+        if (parentMesh) {
+            let orbitRadius = 8;
+            // Compute a new angle based on time or other factors:
+            let angle = (2 * Math.PI * childMesh.userData.port) / 1;  // Adjust as needed
+            childMesh.position.set(
+                Math.cos(angle) * orbitRadius,
+                Math.sin(angle) * orbitRadius,
+                0
+            );
+            // Note: No need to add parent's position; that's handled by the scene graph.
+        }
+    }
+});
+
+}
+
+
+
+spawnChildNodes(parentNode, openPorts) {
+    console.log(`Spawning child nodes for ${parentNode.userData.id} with ports:`, openPorts);
+    const orbitRadius = 3;
+    const numPorts = openPorts.length;
+  
+    // Handle the special external open port (for the router)
+    if (parentNode.userData.type === "router" && parentNode.userData.open_external_port) {
+      let externalPort = parentNode.userData.open_external_port;
+      if (externalPort) {
+        console.log(`Creating external port visualization for ${externalPort}`);
+        let angle = Math.PI / 4;  // Position slightly above
+        // Compute the offset in parent's local coordinates:
+        let offset = new THREE.Vector3(
+            Math.cos(angle) * orbitRadius,
+            Math.sin(angle) * orbitRadius,
+            3  // Slight Z offset
+        );
+  
+        const geometry = new THREE.SphereGeometry(1, 16, 16);
+        const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const externalMesh = new THREE.Mesh(geometry, material);
+        externalMesh.position.copy(offset);  // Set local offset
+  
+        externalMesh.userData = {
+            id: `external-port-${externalPort}`,
+            label: `External Port ${externalPort}`,
+            type: "child",
+            port: externalPort,
+            parentId: parentNode.userData.id,
+        };
+  
+        // Instead of adding to scene, add as a child:
+        parentNode.add(externalMesh);
+        this.nodeRegistry.set(externalMesh.userData.id, externalMesh);
+      }
+    }
+  
+    // Handle normal open ports (local devices)
+    openPorts.forEach((port, index) => {
+      console.log(`Creating moon for port: ${port}, index: ${index}`);
+      let angle = (2 * Math.PI * index) / numPorts;
+      let offset = new THREE.Vector3(
+          Math.cos(angle) * orbitRadius,
+          Math.sin(angle) * orbitRadius,
+          0
+      );
+  
+      const geometry = new THREE.SphereGeometry(0.5, 16, 16);
+      const material = new THREE.MeshBasicMaterial({ color: 0xaaaaaa });
+      const childMesh = new THREE.Mesh(geometry, material);
+      childMesh.position.copy(offset);  // Set local offset
+  
+      childMesh.userData = {
+          id: `${parentNode.userData.id}-port-${port}`,
+          label: `Port ${port}`,
+          type: "child",
+          port: port,
+          parentId: parentNode.userData.id,
+      };
+  
+      // Parent the child mesh to the router node
+      parentNode.add(childMesh);
+      this.nodeRegistry.set(childMesh.userData.id, childMesh);
+    });
+  }
+  
 
 
   getNodesArray() {

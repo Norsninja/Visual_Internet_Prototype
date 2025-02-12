@@ -25,11 +25,11 @@ export class NodesManager {
             this.scene.add(mesh);
             this.nodeRegistry.set(node.id, mesh);
 
-            // ✅ Fix: Keep the router locked at (0,0,0)
+            // Fix: Keep the router locked at (0,0,0)
             if (node.type === "router") {
                 this.nodePositions.set(node.id, new THREE.Vector3(0, 0, 0));
             }
-            // ✅ Local nodes: Cluster **near** the router in 3D
+            // Local nodes: Cluster **near** the router in 3D
             else if (node.type === "device" && routerNode) {
                 let angle = Math.random() * Math.PI * 2;
                 let radius = 30 + Math.random() * 20;
@@ -42,7 +42,7 @@ export class NodesManager {
                 );
                 this.nodePositions.set(node.id, pos);
             }
-            // ✅ External nodes: Further away, but still **stabilized**
+            // External nodes: Further away, but still **stabilized**
             else {
                 let angle = Math.random() * Math.PI * 2;
                 let radius = 100 + Math.random() * 50;
@@ -68,7 +68,7 @@ export class NodesManager {
 
         this.missedUpdates.set(node.id, 0);
 
-        // ✅ Automatically create the external port moon (Red sphere)
+        // Automatically create the external Portal
         if (node.type === "router" && node.open_external_port) {
             console.log(`Router ${node.id} has an open external port: ${node.open_external_port}`);
             
@@ -190,7 +190,14 @@ spawnChildNodes(parentNode, openPorts) {
         );
   
         const geometry = new THREE.SphereGeometry(1, 16, 16);
-        const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const material = new THREE.MeshStandardMaterial({
+            color: 0x00ffff,         // Base color
+            emissive: 0x0077ff,      // Glowing effect color
+            emissiveIntensity: 5,  // Adjust glow strength
+            transparent: true,
+            opacity: 0.8
+          });
+          
         const externalMesh = new THREE.Mesh(geometry, material);
         externalMesh.position.copy(offset);  // Set local offset
   

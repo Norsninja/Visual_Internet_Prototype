@@ -7,6 +7,7 @@ import threading
 import time
 import platform
 import logging
+import ssl
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import netifaces
@@ -24,6 +25,8 @@ persistent_edges = {}
 graph_data = {"nodes": [], "edges": []}
 graph_lock = threading.Lock()
 traffic_data = deque(maxlen=100)  # Store last 100 packets
+# Global external target variable
+external_target = "8.8.8.8"
 ### CORE ENVIRONMENTAL SCANNERS ###
 
 def get_local_ip():
@@ -184,7 +187,37 @@ def packet_callback(packet):
 # Start a background thread to capture packets
 def start_packet_capture():
     sniff(prn=packet_callback, store=False)
-
+# Advanced Scans
+def get_ssl_info(ip, port=443):
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((ip, port), timeout=3) as sock:
+            with context.wrap_socket(sock, server_hostname=ip) as ssock:
+                cert = ssock.getpeercert()
+                return cert
+    except:
+        return "No SSL or Failed to Retrieve"
+    
+def reverse_dns_lookup(ip):
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except socket.herror:
+        return "Unknown"
+def check_cve(service_name, version):
+    url = f"https://services.nvd.nist.gov/rest/json/cves/1.0?keyword={service_name}%20{version}"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except:
+        return "Unknown"    
+def grab_banner(ip, port):
+    try:
+        with socket.create_connection((ip, port), timeout=3) as s:
+            s.sendall(b"GET / HTTP/1.1\r\n\r\n")  # Example request for HTTP services
+            return s.recv(1024).decode(errors="ignore")
+    except Exception:
+        return "Unknown"
 ### ENVIRONMENTAL DATA UPDATER ###
 
 def update_graph_data():
@@ -200,7 +233,7 @@ def update_graph_data():
             continue
 
         devices = run_arp_scan()
-        traceroute_hops = run_traceroute()
+        traceroute_hops = run_traceroute(target=external_target)
         now = time.time()
 
         # Check if the router node already exists
@@ -285,8 +318,33 @@ def update_graph_data():
 
         time.sleep(10)
 
-
-
+@app.route('/banner_grab', methods=['GET'])
+def banner_grab():
+    ip = request.args.get('ip')
+    port = request.args.get('port', type=int)
+    if not ip or not port:
+        return jsonify({'error': 'Missing IP or Port parameter'}), 400
+    return jsonify({'port': port, 'banner': grab_banner(ip, port)})
+@app.route('/cve_lookup', methods=['GET'])
+def cve_lookup():
+    service = request.args.get('service')
+    version = request.args.get('version')
+    if not service or not version:
+        return jsonify({'error': 'Missing service or version parameters'}), 400
+    return jsonify({'cve_data': check_cve(service, version)})
+@app.route('/reverse_dns', methods=['GET'])
+def reverse_dns():
+    ip = request.args.get('ip')
+    if not ip:
+        return jsonify({'error': 'Missing IP parameter'}), 400
+    return jsonify({'hostname': reverse_dns_lookup(ip)})
+@app.route('/ssl_info', methods=['GET'])
+def ssl_info():
+    ip = request.args.get('ip')
+    port = request.args.get('port', type=int)
+    if not ip or not port:
+        return jsonify({'error': 'Missing IP or Port parameter'}), 400
+    return jsonify({'ssl_data': get_ssl_info(ip, port)})
 
 
 @app.route('/network', methods=['GET'])
@@ -303,16 +361,40 @@ def scan_ports():
         return jsonify({'error': 'Missing IP parameter'}), 400
     try:
         open_ports = scapy_port_scan(ip)
-        return jsonify({'ports': open_ports})
+
+        # Store the open ports in persistent_nodes
+        if ip in persistent_nodes:
+            persistent_nodes[ip]["open_ports"] = open_ports
+        else:
+            persistent_nodes[ip] = {"id": ip, "open_ports": open_ports}
+
+        return jsonify({
+            'ports': open_ports,
+            'message': 'Scan complete. Select a port to perform advanced scans.'
+        })
     except Exception as e:
         logging.error("Error scanning ports for %s: %s", ip, e)
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/traffic', methods=['GET'])
 def get_traffic():
     """Expose captured packet data via API."""
     return jsonify(list(traffic_data))
 
+@app.route('/set_external_target', methods=['POST'])
+def set_external_target():
+    global external_target
+    data = request.get_json()  # Expecting a JSON payload like {"target": "1.1.1.1"}
+    new_target = data.get("target")
+    # Basic validation: ensure it's a valid IPv4 address (you can improve this validation if needed)
+    if new_target and re.match(r"^(?:\d{1,3}\.){3}\d{1,3}$", new_target):
+        external_target = new_target
+        logging.info(f"External target updated to: {external_target}")
+        return jsonify({"status": "success", "target": external_target}), 200
+    else:
+        return jsonify({"status": "error", "message": "Invalid IP address provided"}), 400
+    
 if __name__ == '__main__':
     threading.Thread(target=start_packet_capture, daemon=True).start()
     threading.Thread(target=update_graph_data, daemon=True).start()

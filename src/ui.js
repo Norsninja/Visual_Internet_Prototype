@@ -27,12 +27,64 @@ export class UIManager {
     
         this.infoBox.innerHTML = `
             <strong>${data.label || "Unknown"}</strong><br>
+            IP: ${data.id || "N/A"}<br>
             MAC: ${data.mac || "N/A"}<br>
             Role: ${data.role || "N/A"}<br>
             ${scanButtonHtml}
             ${travelButtonHtml}
             <div id="scanResults"></div>
         `;
+        // Check if the selected node is a "port moon"
+        if (node.userData.port) {
+            this.infoBox.innerHTML += `
+                <br><strong>Advanced Port Scans:</strong><br>
+                <button id="bannerGrabButton">Banner Grab</button>
+                <button id="cveLookupButton">Check CVE</button>
+                <button id="reverseDNSButton">Reverse DNS</button>
+                <button id="sslInfoButton">SSL Info</button>
+                <div id="advancedScanResults"></div>
+            `;
+    
+            // ** Persist Advanced Scan Results **
+            if (data.advancedScanResults) {
+                const scanResultsDiv = this.infoBox.querySelector("#advancedScanResults");
+                scanResultsDiv.innerHTML = data.advancedScanResults;
+            }
+    
+            const scanResultsDiv = this.infoBox.querySelector("#advancedScanResults");
+    
+            document.getElementById("bannerGrabButton").addEventListener("click", async () => {
+                const response = await fetch(`http://localhost:5000/banner_grab?ip=${data.parentId}&port=${data.port}`);
+                const result = await response.json();
+                const bannerText = `<br><strong>Banner:</strong> ${result.banner}`;
+                data.advancedScanResults = (data.advancedScanResults || "") + bannerText;
+                scanResultsDiv.innerHTML += bannerText;
+            });
+    
+            document.getElementById("cveLookupButton").addEventListener("click", async () => {
+                const response = await fetch(`http://localhost:5000/cve_lookup?service=${data.service}&version=${data.version}`);
+                const result = await response.json();
+                const cveText = `<br><strong>CVE Info:</strong> ${JSON.stringify(result.cve_data)}`;
+                data.advancedScanResults = (data.advancedScanResults || "") + cveText;
+                scanResultsDiv.innerHTML += cveText;
+            });
+    
+            document.getElementById("reverseDNSButton").addEventListener("click", async () => {
+                const response = await fetch(`http://localhost:5000/reverse_dns?ip=${data.parentId}`);
+                const result = await response.json();
+                const dnsText = `<br><strong>Hostname:</strong> ${result.hostname}`;
+                data.advancedScanResults = (data.advancedScanResults || "") + dnsText;
+                scanResultsDiv.innerHTML += dnsText;
+            });
+    
+            document.getElementById("sslInfoButton").addEventListener("click", async () => {
+                const response = await fetch(`http://localhost:5000/ssl_info?ip=${data.parentId}&port=${data.port}`);
+                const result = await response.json();
+                const sslText = `<br><strong>SSL Certificate:</strong> ${JSON.stringify(result.ssl_data)}`;
+                data.advancedScanResults = (data.advancedScanResults || "") + sslText;
+                scanResultsDiv.innerHTML += sslText;
+            });
+        }     
     
         if (!window.cameraController || !window.cameraController.camera) {
             console.error("Error: CameraController is missing or uninitialized.");
@@ -48,21 +100,16 @@ export class UIManager {
             return;
         }
     
-        // ✅ Convert 3D world position to 2D screen coordinates
-        const nodePosition = node.position.clone();
-        nodePosition.project(camera); // Project into normalized device coordinates
-    
-        // ✅ SAFETY CHECK: Ensure projection was successful
-        if (!nodePosition) {
-            console.error("Error: nodePosition.project() failed.");
-            return;
-        }
-    
+        // Convert 3D world position to 2D screen coordinates
+        const nodePosition = new THREE.Vector3();
+        node.getWorldPosition(nodePosition);  // Convert relative position to absolute
+        nodePosition.project(camera);  // Project into normalized device coordinates
+        
         // Convert normalized device coordinates (-1 to +1) to screen pixels
         const screenX = (nodePosition.x + 1) / 2 * window.innerWidth;
         const screenY = (-nodePosition.y + 1) / 2 * window.innerHeight;
-    
-        // Position the info box slightly above the node to avoid overlap
+        
+        // Position the info box above the selected target (not the origin)
         this.infoBox.style.left = `${screenX + 20}px`;
         this.infoBox.style.top = `${screenY - 20}px`;
     
@@ -85,7 +132,8 @@ export class UIManager {
                     const scanResultsDiv = this.infoBox.querySelector("#scanResults");
                     scanResultsDiv.innerHTML = `<br><strong>Open Ports:</strong> ${result.ports.length > 0 ? result.ports.join(", ") : "None found"}`;
     
-                    node.userData.open_ports = result.ports;
+                    // ** Store scan results in userData for persistence **
+                    node.userData.scanResults = result;
     
                     if (result.ports.length > 0) {
                         node.material.color.set(0xffff00);
@@ -103,6 +151,7 @@ export class UIManager {
                 }
             }, { once: true });
         }
+    
     
         if (travelButtonHtml) {
             const travelButton = this.infoBox.querySelector("#travelButton");
@@ -122,6 +171,77 @@ export class UIManager {
                 }
             });
         }
+        // Inside ui.js in the showInfo() method, after setting up the basic info content
+if (node.userData.type === "router" && node.userData.open_external_port) {
+    // Append the change external network UI elements
+    this.infoBox.innerHTML += `
+      <br>
+      <button id="changeExternalNetwork">Change External Network</button>
+      <div id="externalNetworkSelector" style="display:none; margin-top:10px;">
+        <select id="externalNetworkDropdown">
+          <option value="8.8.8.8">Google DNS (8.8.8.8)</option>
+          <option value="1.1.1.1">Cloudflare (1.1.1.1)</option>
+          <option value="208.67.222.222">OpenDNS (208.67.222.222)</option>
+          <option value="custom">Custom...</option>
+        </select>
+        <input id="customExternalNetwork" type="text" placeholder="Enter custom IP" style="display:none; margin-left:5px;" />
+        <button id="submitExternalNetwork" style="margin-left:5px;">Submit</button>
+      </div>
+    `;
+  
+    // Set up the event listener for showing/hiding the selector
+    const changeBtn = this.infoBox.querySelector("#changeExternalNetwork");
+    const selectorDiv = this.infoBox.querySelector("#externalNetworkSelector");
+    changeBtn.addEventListener("click", () => {
+      selectorDiv.style.display = selectorDiv.style.display === "none" ? "block" : "none";
+    });
+  
+    // Listen for dropdown changes to reveal the custom input when needed
+    const dropdown = this.infoBox.querySelector("#externalNetworkDropdown");
+    const customInput = this.infoBox.querySelector("#customExternalNetwork");
+    dropdown.addEventListener("change", () => {
+      if (dropdown.value === "custom") {
+        customInput.style.display = "inline-block";
+      } else {
+        customInput.style.display = "none";
+      }
+    });
+  
+    // Set up the submit button to send the new external target to the backend
+    const submitBtn = this.infoBox.querySelector("#submitExternalNetwork");
+    submitBtn.addEventListener("click", async () => {
+      let selectedTarget = dropdown.value;
+      if (selectedTarget === "custom") {
+        selectedTarget = customInput.value;
+      }
+      
+      // Validate the input (basic validation)
+      if (!selectedTarget.match(/^(?:\d{1,3}\.){3}\d{1,3}$/)) {
+        alert("Please enter a valid IPv4 address.");
+        return;
+      }
+      
+      try {
+        const response = await fetch("http://localhost:5000/set_external_target", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ target: selectedTarget })
+        });
+        const result = await response.json();
+        if (result.status === "success") {
+          alert(`External network target updated to ${result.target}. Changes will be visible after the next update.`);
+        } else {
+          alert(`Error: ${result.message}`);
+        }
+      } catch (err) {
+        console.error("Error updating external target:", err);
+        alert("Error updating external target.");
+      }
+    });
+  }
+  
     }
     
     updateTravelStatus(statusMessage) {

@@ -5,7 +5,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export class CameraController {
   constructor(renderer, ship) {
     this.ship = ship; // Track the ship's position
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+
     this.camera.position.set(0, 20, 50); // Default start position
 
     this.controls = new OrbitControls(this.camera, renderer.domElement);

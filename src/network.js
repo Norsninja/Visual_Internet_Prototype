@@ -84,3 +84,25 @@ async function fetchTrafficData(nodesManager, edgesManager) {
 // Poll traffic every 5 seconds
 setInterval(() => fetchTrafficData(window.nodesManager, window.edgesManager), 5000);
 
+//helper function for background
+// You can add this function in network.js or as a global helper in main.js.
+window.getTrafficLevel = function() {
+  // Suppose you maintain a global array of traffic packets (or aggregate over your deque).
+  // For illustration, assume window.trafficPackets is updated from your traffic endpoint.
+  if (!window.trafficPackets || window.trafficPackets.length === 0) return 0;
+
+  // Sum packet sizes over the last N seconds
+  let totalSize = 0;
+  window.trafficPackets.forEach(packet => {
+    totalSize += packet.size;
+  });
+
+  // Normalize the value (choose a maximum value based on expected peak traffic)
+  const maxTraffic = 100000; // Adjust based on testing
+  const normalizedTraffic = Math.min(totalSize / maxTraffic, 1.0);
+  return normalizedTraffic;
+};
+
+// Ensure that traffic data from your /traffic endpoint is stored globally, e.g.:
+window.trafficPackets = [];
+// Modify your fetchTrafficData function to update window.trafficPackets as needed.

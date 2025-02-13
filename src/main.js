@@ -17,20 +17,23 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// Create the scene.
-const sceneManager = new SceneManager();
+// Debug renderer
+renderer.debug.checkShaderErrors = true;
+
+// ✅ Create the scene FIRST (so `scene` exists before using it)
+const sceneManager = new SceneManager(window.camera);
+window.sceneManager = sceneManager;
 const scene = sceneManager.scene;
 
-
-// Create and add the ship.
+// ✅ Now create the ship (AFTER scene is defined)
 const ship = new Ship(tweenGroup);
 scene.add(ship.getMesh());
 window.ship = ship;
 
-// Initialize the camera (passing the ship for centering/orbiting).
+// ✅ Create the camera AFTER ship is created
 const cameraController = new CameraController(renderer, ship.getMesh());
 window.cameraController = cameraController;
-window.camera = cameraController.camera; // Make it globally accessible
+window.camera = cameraController.camera; // Store globally
 
 // Initialize game objects.
 const nodesManager = new NodesManager(scene);
@@ -39,11 +42,7 @@ const uiManager = new UIManager();
 const eventsManager = new EventsManager(window.camera, nodesManager, uiManager, ship);
 const networkManager = new NetworkManager(nodesManager, edgesManager);
 networkManager.startPeriodicUpdates(10000);
-const routerNode = nodesManager.getNodeById("router"); // Make sure your router node has the ID "router"
-if (routerNode) {
-  // Position the ship in orbit around the router's center
-  ship.setOrbitAroundNode(routerNode.getWorldPosition(new THREE.Vector3()));
-}
+
 window.uiManager = uiManager;
 window.maxTravelDistance = 500;
 window.nodesManager = nodesManager;
@@ -52,20 +51,36 @@ window.edgesManager = edgesManager;
 // Update the tween group manually every frame.
 function animate(time) {
   requestAnimationFrame(animate);
+  const delta = time * 0.001; // delta in seconds
+
+  // Compute network metrics
+  const nodesArray = window.nodesManager.getNodesArray();
+  const totalNodes = nodesArray.length;
+  const localNodes = nodesArray.filter(n => n.userData.type === "device").length;
+  const externalNodes = nodesArray.filter(n => n.userData.type === "external").length;
+  
+  // Get traffic level metric
+  const trafficLevel = window.getTrafficLevel ? window.getTrafficLevel() : 0;
+
+  const metrics = {
+    trafficLevel,
+    totalNodes,
+    localNodes,
+    externalNodes,
+  };
+
+  // Update procedural background
+  if (window.sceneManager.animateBackground) {
+    window.sceneManager.animateBackground(delta, metrics);
+  }
+
   tweenGroup.update(time);
   cameraController.update();
 
-  // Update node positions using forces.
   nodesManager.applyForces(edgesManager.edgesData || []);
-
-  // Update the edge geometries to follow the moving nodes.
   edgesManager.updateEdgePositions();
-
-  // Update animated traffic particles.
   edgesManager.updateTraffic();
 
   renderer.render(scene, window.camera);
 }
 animate();
-
-

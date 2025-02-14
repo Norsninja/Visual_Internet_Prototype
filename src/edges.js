@@ -14,14 +14,17 @@ export class EdgesManager {
     this.edgesData = edgesData; // Save edges for access in main.js  
     const edgeKeys = new Set(edgesData.map(edge => `${edge.source}-${edge.target}`));
 
-    // Remove outdated edges
-    for (let key of this.edgeRegistry.keys()) {
-      if (!edgeKeys.has(key)) {
-        const line = this.edgeRegistry.get(key);
-        this.scene.remove(line);
-        this.edgeRegistry.delete(key);
-      }
-    }
+    // Do not remove edges unless backend explicitly marks them as outdated
+    const currentKeys = new Set(this.edgeRegistry.keys());
+    edgeKeys.forEach(key => currentKeys.delete(key)); // Remove only what's NOT in the new dataset
+
+    // Remove explicitly outdated edges
+    currentKeys.forEach(key => {
+      const line = this.edgeRegistry.get(key);
+      this.scene.remove(line);
+      this.edgeRegistry.delete(key);
+    });
+
 
     // Create new edges
     edgesData.forEach(edge => {
@@ -56,11 +59,11 @@ export class EdgesManager {
       const sourceMesh = this.getNodeById(sourceId);
       const targetMesh = this.getNodeById(targetId);
       if (sourceMesh && targetMesh) {
-        const points = [sourceMesh.position, targetMesh.position];
+        const points = [sourceMesh.position.clone(), targetMesh.position.clone()];
         line.geometry.setFromPoints(points);
-        if (line.geometry.attributes.position) {
-          line.geometry.attributes.position.needsUpdate = true;
-        }
+        line.geometry.computeBoundingSphere();  // Ensure correct updates
+        line.geometry.attributes.position.needsUpdate = true;
+        
       }
     });
   }

@@ -5,33 +5,42 @@ export class NetworkManager {
     this.edgesManager = edgesManager;
     this.endpoint = endpoint;
   }
-
-  async fetchNetworkData() {
+  async fetchNetworkData(attempt = 0) {
     try {
-      const response = await fetch(`${this.endpoint}/network`);
-      if (!response.ok) throw new Error(`Network error: ${response.status}`);
-  
-      const data = await response.json();
-      console.log("Fetched Network Data:", data);
-  
-      // ✅ Ensure data contains valid 'nodes' and 'edges'
-      if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
-        console.warn("Invalid network data received:", data);
-        return;
-      }
-  
-      this.updateNodes(data.nodes);
-      this.updateEdges(data.edges);
-  
-    } catch (error) {
-      console.error("Error fetching network data:", error);
-    }
-  }
-  
+        const response = await fetch(`${this.endpoint}/network`);
+        if (!response.ok) throw new Error(`Network error: ${response.status}`);
 
-  updateNodes(nodes) {
+        let data = await response.json();
+
+        if (!data.nodes || data.nodes.length === 0) {
+            console.warn(`No nodes received (Attempt ${attempt}), retrying in 5s...`);
+            if (attempt < 10) {  // Retry up to 10 times
+                setTimeout(() => this.fetchNetworkData(attempt + 1), 5000);
+            }
+            return;
+        }
+
+        console.log("Fetched Network Data:", data);
+
+        // ✅ Ensure Three.js correctly updates positions
+        this.updateNodes(data.nodes);
+        this.updateEdges(data.edges);
+    } catch (error) {
+        console.error("Error fetching network data:", error);
+        setTimeout(() => this.fetchNetworkData(attempt + 1), 5000);
+    }
+}
+ 
+
+updateNodes(nodes) {
+    if (!this.nodesManager) {
+        console.error("Error: nodesManager is undefined when calling updateNodes()");
+        return;
+    }
+
     nodes.forEach(node => {
         let existingNode = this.nodesManager.getNodeById(node.id);
+
         if (existingNode) {
             // ✅ Only update metadata, NOT position
             existingNode.userData = { ...existingNode.userData, ...node };
@@ -41,22 +50,92 @@ export class NetworkManager {
             this.nodesManager.updateNodes([node], { preservePositions: true });
         }
     });
+    
 }
-
-
   updateEdges(edges) {
     this.edgesData = edges || [];
     // Directly pass all edges to the EdgesManager
     this.edgesManager.updateEdges(this.edgesData);
   }
 
-
-
-
   startPeriodicUpdates(intervalMs = 10000) {
     this.fetchNetworkData(); // Initial call
     setInterval(() => this.fetchNetworkData(), intervalMs);
   }
+  async fetchTracerouteData(targetIP, forceNew = false) {
+    let url = `${this.endpoint}/remote_traceroute?target=${targetIP}`;
+    if (forceNew) url += "&nocache=true";  // Backend should respect this
+
+    fetch(url)
+        .then(response => {
+            if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+            return response.json();
+        })
+        .then(data => {
+            console.log("Fetched Traceroute Data:", data);
+            if (!data.hops || data.hops.length === 0) {
+                console.warn(`⚠️ No hops returned for ${targetIP}`);
+                return;
+            }
+            this.updateTracerouteNodes(data.hops, targetIP);
+        })
+        .catch(error => {
+            console.error("❌ Error fetching traceroute:", error);
+            alert(`Failed to run traceroute for ${targetIP}.`);
+        });
+}
+
+  updateTracerouteNodes(hops, targetIP) {
+    let prevNode = this.nodesManager.getNodeById(targetIP);
+    let newEdges = [];
+    let newNodes = [];
+
+    hops.forEach((hop, index) => {
+        let existingNode = this.nodesManager.getNodeById(hop);
+
+        if (!existingNode) {
+            const newNode = {
+                id: hop,
+                label: `Hop ${index + 1}`,
+                type: "external",
+                color: "red"
+            };
+            this.nodesManager.updateNodes([newNode], { preservePositions: false });
+
+            // Add the node to the list for backend storage
+            newNodes.push(newNode);
+            existingNode = this.nodesManager.getNodeById(hop);
+        }
+
+        if (prevNode) {
+            const edgeKey = `${prevNode.userData.id}-${hop}`;
+            if (!this.edgesManager.edgeRegistry.has(edgeKey)) {
+                newEdges.push({ source: prevNode.userData.id, target: hop });
+            }
+        }
+
+        prevNode = existingNode;
+    });
+
+    // ✅ Merge and preserve existing edges
+    const mergedEdges = [...this.edgesManager.edgesData, ...newEdges];
+    this.edgesManager.updateEdges(mergedEdges);
+
+    // ✅ Fetch full graph after update to prevent nodes from disappearing
+    fetch(`${this.endpoint}/full_graph`)
+        .then(response => response.json())
+        .then(data => {
+            this.nodesManager.updateNodes(data.nodes, { preservePositions: true });
+            this.edgesManager.updateEdges(data.edges);
+        })
+        .catch(error => console.error("Error fetching full graph:", error));
+
+}
+
+
+
+
+
 }
 
 // Separate function for traffic fetching
@@ -106,3 +185,5 @@ window.getTrafficLevel = function() {
 // Ensure that traffic data from your /traffic endpoint is stored globally, e.g.:
 window.trafficPackets = [];
 // Modify your fetchTrafficData function to update window.trafficPackets as needed.
+
+//remote tracert code

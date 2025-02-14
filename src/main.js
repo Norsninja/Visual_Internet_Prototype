@@ -3,7 +3,7 @@ import { Group, Tween } from '@tweenjs/tween.js';
 import { CameraController } from './camera.js';
 import { Ship } from './ship.js';
 import { SceneManager } from './scene.js';
-import { NodesManager } from './nodes.js';
+import { NodesManager } from './nodes/nodes.js';
 import { EdgesManager } from './edges.js';
 import { UIManager } from './ui.js';
 import { EventsManager } from './events.js';
@@ -40,8 +40,12 @@ const nodesManager = new NodesManager(scene);
 const edgesManager = new EdgesManager(scene, (id) => nodesManager.getNodeById(id));
 const uiManager = new UIManager();
 const eventsManager = new EventsManager(window.camera, nodesManager, uiManager, ship);
+// ✅ Correct: Assign the first `networkManager` instance globally
 const networkManager = new NetworkManager(nodesManager, edgesManager);
+window.networkManager = networkManager;
 networkManager.startPeriodicUpdates(10000);
+
+
 
 window.uiManager = uiManager;
 window.maxTravelDistance = 500;
